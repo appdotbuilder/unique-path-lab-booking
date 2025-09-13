@@ -1,18 +1,65 @@
+import { db } from '../db';
+import { appointmentsTable } from '../db/schema';
 import { type GetAppointmentsFilter, type Appointment } from '../schema';
+import { eq, and, gte, lte, or, ilike, desc } from 'drizzle-orm';
+import type { SQL } from 'drizzle-orm';
 
-export async function getAppointments(filter?: GetAppointmentsFilter): Promise<Appointment[]> {
-  // This is a placeholder declaration! Real code should be implemented here.
-  // The goal of this handler is:
-  // 1. Query appointments from the database
-  // 2. Apply filters (status, date range, search by name/phone/email)
-  // 3. Return filtered and sorted appointments (latest first)
-  // 4. Support pagination if needed for large datasets
-  
-  // Filter logic will include:
-  // - Status filtering if provided
-  // - Date range filtering (startDate to endDate) if provided
-  // - Text search across name, phone, email fields if search term provided
-  // - Order by created_at DESC for most recent first
-  
-  return Promise.resolve([] as Appointment[]);
-}
+export const getAppointments = async (filter?: GetAppointmentsFilter): Promise<Appointment[]> => {
+  try {
+    // Build conditions array
+    const conditions: SQL<unknown>[] = [];
+
+    if (filter) {
+      // Status filtering
+      if (filter.status) {
+        conditions.push(eq(appointmentsTable.status, filter.status));
+      }
+
+      // Date range filtering
+      if (filter.startDate) {
+        conditions.push(gte(appointmentsTable.preferred_date, filter.startDate));
+      }
+
+      if (filter.endDate) {
+        conditions.push(lte(appointmentsTable.preferred_date, filter.endDate));
+      }
+
+      // Text search across name, phone, and email
+      if (filter.search && filter.search.trim()) {
+        const searchTerm = `%${filter.search.trim()}%`;
+        conditions.push(
+          or(
+            ilike(appointmentsTable.name, searchTerm),
+            ilike(appointmentsTable.phone, searchTerm),
+            ilike(appointmentsTable.email, searchTerm)
+          )!
+        );
+      }
+    }
+
+    // Build query with conditions
+    const baseQuery = db.select().from(appointmentsTable);
+    
+    const queryWithConditions = conditions.length > 0
+      ? baseQuery.where(conditions.length === 1 ? conditions[0] : and(...conditions))
+      : baseQuery;
+
+    // Execute query with ordering
+    const results = await queryWithConditions
+      .orderBy(desc(appointmentsTable.created_at))
+      .execute();
+
+    // Convert database results to proper Appointment type
+    return results.map(result => ({
+      ...result,
+      tests: result.tests as string[], // JSONB field needs type assertion
+      preferred_date: result.preferred_date as Date,
+      created_at: result.created_at as Date,
+      updated_at: result.updated_at as Date,
+      last_reminder_sent_at: result.last_reminder_sent_at as Date | null
+    }));
+  } catch (error) {
+    console.error('Get appointments failed:', error);
+    throw error;
+  }
+};
